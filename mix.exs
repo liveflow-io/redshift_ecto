@@ -38,7 +38,8 @@ defmodule RedshiftEcto.MixProject do
       {:postgrex, "~> 0.15.1"},
       {:ecto_replay_sandbox, "~> 2.0"},
       {:ex_doc, "~> 0.18", only: :dev, runtime: false},
-      {:jason, "~> 1.1", optional: true}
+      {:jason, "~> 1.1", optional: true},
+      {:aws, "~> 1.0"}
     ]
   end
 

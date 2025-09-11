@@ -203,7 +203,7 @@ defmodule RedshiftEcto do
   ## Helpers
 
   defp run_query(sql, opts) do
-    {:ok, _} = Application.ensure_all_started(:postgrex)
+    {:ok, _} = Application.ensure_all_started(:aws)
 
     opts =
       opts
@@ -215,9 +215,9 @@ defmodule RedshiftEcto do
 
     task =
       Task.Supervisor.async_nolink(pid, fn ->
-        {:ok, conn} = Postgrex.start_link(opts)
-
-        value = RedshiftEcto.Connection.execute(conn, sql, [], opts)
+        {:ok, conn} = DBConnection.start_link(RedshiftEcto.DataConnection, opts)
+        query = %RedshiftEcto.Query{statement: sql}
+        value = DBConnection.execute(conn, query, [], opts)
         GenServer.stop(conn)
         value
       end)
@@ -231,8 +231,7 @@ defmodule RedshiftEcto do
       {:ok, {:error, error}} ->
         {:error, error}
 
-      {:exit, {%{__struct__: struct} = error, _}}
-      when struct in [Postgrex.Error, DBConnection.Error] ->
+      {:exit, {%{__struct__: DBConnection.Error} = error, _}} ->
         {:error, error}
 
       {:exit, reason} ->
