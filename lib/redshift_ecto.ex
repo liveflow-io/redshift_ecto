@@ -2,8 +2,9 @@ defmodule RedshiftEcto do
   @moduledoc """
   Ecto adapter for [AWS Redshift](https://aws.amazon.com/redshift/).
 
-  It uses `Postgrex` for communicating to the database and a connection pool,
-  such as `DBConnection.Poolboy`.
+  It communicates with Redshift through the AWS Redshift Data API via the
+  [`AWS.RedshiftData`](https://hexdocs.pm/aws/AWS.RedshiftData.html) module.
+  Connections are managed using `DBConnection`.
 
   This adapter is based on Ecto's builtin `Ecto.Adapters.Postgres` adapter. It
   delegates some functions to it but changes the implementation of most that
@@ -203,43 +204,9 @@ defmodule RedshiftEcto do
   ## Helpers
 
   defp run_query(sql, opts) do
-    {:ok, _} = Application.ensure_all_started(:postgrex)
-
-    opts =
-      opts
-      |> Keyword.drop([:name, :log])
-      |> Keyword.put(:pool, DBConnection.Connection)
-      |> Keyword.put(:backoff_type, :stop)
-
-    {:ok, pid} = Task.Supervisor.start_link()
-
-    task =
-      Task.Supervisor.async_nolink(pid, fn ->
-        {:ok, conn} = Postgrex.start_link(opts)
-
-        value = RedshiftEcto.Connection.execute(conn, sql, [], opts)
-        GenServer.stop(conn)
-        value
-      end)
-
-    timeout = Keyword.get(opts, :timeout, 15_000)
-
-    case Task.yield(task, timeout) || Task.shutdown(task) do
-      {:ok, {:ok, result}} ->
-        {:ok, result}
-
-      {:ok, {:error, error}} ->
-        {:error, error}
-
-      {:exit, {%{__struct__: struct} = error, _}}
-      when struct in [Postgrex.Error, DBConnection.Error] ->
-        {:error, error}
-
-      {:exit, reason} ->
-        {:error, RuntimeError.exception(Exception.format_exit(reason))}
-
-      nil ->
-        {:error, RuntimeError.exception("command timed out")}
-    end
+    {:ok, conn} = RedshiftEcto.DataAPI.start_link(opts)
+    result = RedshiftEcto.DataAPI.execute(conn, sql, [])
+    GenServer.stop(conn)
+    result
   end
 end

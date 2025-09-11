@@ -3,6 +3,7 @@ if Code.ensure_loaded?(Postgrex) do
     @moduledoc false
 
     alias Ecto.Adapters.Postgres.Connection, as: Postgres
+    alias RedshiftEcto.DataAPI
 
     @default_port 5439
     @behaviour Ecto.Adapters.SQL.Connection
@@ -10,20 +11,33 @@ if Code.ensure_loaded?(Postgrex) do
     ## Module and Options
 
     def child_spec(opts) do
-      opts
-      |> Keyword.put_new(:port, @default_port)
-      |> Keyword.put_new(:types, Ecto.Adapters.Postgres.TypeModule)
-      |> Postgrex.child_spec()
+      opts = Keyword.put_new(opts, :port, @default_port)
+      DBConnection.child_spec(DataAPI, opts)
     end
 
     # constraints may be defined but are not enforced by Amazon Redshift
-    def to_constraints(%Postgrex.Error{}), do: []
+    # The Data API does not provide detailed constraint errors
+    def to_constraints(_), do: []
 
     ## Query
 
-    defdelegate prepare_execute(conn, name, sql, params, opts), to: Postgres
-    defdelegate execute(conn, sql_or_query, params, opts), to: Postgres
-    defdelegate stream(conn, sql, params, opts), to: Postgres
+    def prepare_execute(conn, _name, sql, params, opts) do
+      query = %RedshiftEcto.Query{statement: sql}
+      DBConnection.prepare_execute(conn, query, params, opts)
+    end
+
+    def execute(conn, %RedshiftEcto.Query{} = query, params, opts) do
+      DBConnection.execute(conn, query, params, opts)
+    end
+
+    def execute(conn, sql, params, opts) when is_binary(sql) do
+      query = %RedshiftEcto.Query{statement: sql}
+      DBConnection.execute(conn, query, params, opts)
+    end
+
+    def stream(_conn, _sql, _params, _opts) do
+      raise "stream is not supported by Redshift Data API"
+    end
 
     alias Ecto.Query
     alias Ecto.Query.{BooleanExpr, JoinExpr, QueryExpr}
