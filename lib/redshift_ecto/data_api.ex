@@ -101,7 +101,12 @@ defmodule RedshiftEcto.DataAPI do
     case RedshiftData.get_statement_result(client, %{id: id}) do
       {:ok, %{body: body}} ->
         columns = Enum.map(body["ColumnMetadata"], & &1["name"])
-        rows = Enum.map(body["Records"], &Enum.map(&1, &value_from_field/1))
+
+        rows =
+          Enum.map(body["Records"], fn record ->
+            Enum.map(record, &value_from_field/1)
+          end)
+
         result = %DBConnection.Result{columns: columns, rows: rows, num_rows: length(rows)}
         {:ok, result}
 
