@@ -1,3 +1,3 @@
-use Mix.Config
+import Config
 
-config :postgrex, :json_library, Jason
+config :aws, :json_library, Jason

@@ -13,17 +13,51 @@ Add `redshift_ecto` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:redshift_ecto, "~> 0.1.0"}
+    {:redshift_ecto, "~> 0.2.0"}
   ]
 end
 ```
 
-### Example configuration
+## Connecting
+
+`RedshiftEcto` communicates with Redshift through the
+[Redshift Data API](https://docs.aws.amazon.com/redshift/latest/mgmt/data-api.html)
+via the [`AWS.RedshiftData`](https://hexdocs.pm/aws/AWS.RedshiftData.html)
+module. The repository configuration accepts the connection options required
+by the AWS client.
+
+### Production cluster
+
+Provide your AWS credentials through the environment or explicitly in the
+configuration. Specify the cluster identifier, database name and either a
+database user or a Secrets Manager ARN:
 
 ```elixir
 config :my_app, MyApp.Repo,
   adapter: RedshiftEcto,
-  url: "ecto://user:pass@data-warehouse.abc123.us-east-1.redshift.amazonaws.com:5439/db"
+  region: "us-east-1",
+  cluster_identifier: "my-redshift-cluster",
+  database: "dev",
+  db_user: "awsuser"
+  # or: secret_arn: "arn:aws:secretsmanager:..."
+```
+
+### Localstack
+
+When developing locally you can point the adapter at a Localstack instance
+that provides the Redshift Data API. Use the Localstack endpoint and dummy
+credentials:
+
+```elixir
+config :my_app, MyApp.Repo,
+  adapter: RedshiftEcto,
+  region: "us-east-1",
+  cluster_identifier: "local",
+  database: "dev",
+  db_user: "test",
+  access_key_id: "test",
+  secret_access_key: "test",
+  endpoint: "http://localhost:4566"
 ```
 
 ## Testing
