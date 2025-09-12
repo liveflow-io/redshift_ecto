@@ -35,11 +35,10 @@ defmodule RedshiftEcto.MixProject do
   defp deps do
     [
       {:ecto_sql, "~> 3.2"},
-      {:postgrex, "~> 0.15.1"},
       {:ecto_replay_sandbox, "~> 2.0"},
       {:ex_doc, "~> 0.18", only: :dev, runtime: false},
       {:jason, "~> 1.1", optional: true},
-      {:aws, "~> 0.13"}
+      {:aws, "~> 1.0"}
     ]
   end
 
