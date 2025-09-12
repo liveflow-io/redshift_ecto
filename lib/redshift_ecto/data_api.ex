@@ -32,6 +32,30 @@ defmodule RedshiftEcto.DataAPI do
   # DBConnection callbacks --------------------------------------------------
 
   @impl true
+  def checkout(state), do: {:ok, state}
+
+  @impl true
+  def checkin(state), do: {:ok, state}
+
+  @impl true
+  def handle_begin(_opts, state), do: {:ok, state}
+
+  @impl true
+  def handle_commit(_opts, state), do: {:ok, state}
+
+  @impl true
+  def handle_rollback(_opts, state), do: {:ok, state}
+
+  @impl true
+  def handle_status(_opts, state), do: {:idle, state}
+
+  @impl true
+  def ping(state), do: {:ok, state}
+
+  @impl true
+  def handle_info(_msg, state), do: {:ok, state}
+
+  @impl true
   def connect(opts) do
     client_opts =
       opts
