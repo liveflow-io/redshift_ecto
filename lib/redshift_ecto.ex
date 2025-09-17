@@ -95,7 +95,7 @@ defmodule RedshiftEcto do
   """
 
   # Inherit all behaviour from Ecto.Adapters.SQL
-  use Ecto.Adapters.SQL, :postgrex
+  use Ecto.Adapters.SQL, driver: :postgrex
 
   alias Ecto.Adapters.Postgres
 
@@ -104,6 +104,8 @@ defmodule RedshiftEcto do
   @behaviour Ecto.Adapter.Structure
 
   defdelegate extensions, to: Postgres
+  @impl true
+  defdelegate lock_for_migrations(meta, opts, fun), to: Postgres
 
   ## Custom Redshift types
 
@@ -114,28 +116,75 @@ defmodule RedshiftEcto do
 
   @doc false
   def loaders(:map, type), do: [&json_decode/1, type]
-  def loaders({:map, _}, type), do: [&json_decode/1, type]
+
+  def loaders({:map, _} = type, _) do
+    [&json_decode/1, &Ecto.Type.embedded_load(type, &1, :json)]
+  end
 
   def loaders({:embed, _} = type, _) do
-    [&json_decode/1, &Ecto.Adapters.SQL.load_embed(type, &1)]
+    [&json_decode/1, &Ecto.Type.embedded_load(type, &1, :json)]
   end
 
   def loaders(:binary_id, _type), do: [&{:ok, &1}]
   def loaders(:uuid, Ecto.UUID), do: [&{:ok, &1}]
   def loaders(_, type), do: [type]
 
+  def json_library do
+    configured = Application.get_env(:postgrex, :json_library)
+
+    case configured do
+      nil ->
+        default_json_library()
+
+      {library, _opts} ->
+        ensure_json_library(library)
+
+      library ->
+        ensure_json_library(library)
+    end
+  end
+
+  def encode_json!(value) do
+    json_encode!(json_library(), value)
+  end
+
+  defp ensure_json_library(library) do
+    if Code.ensure_loaded?(library) do
+      library
+    else
+      default_json_library()
+    end
+  end
+
+  defp default_json_library do
+    cond do
+      Code.ensure_loaded?(Jason) ->
+        Jason
+
+      Code.ensure_loaded?(:json) ->
+        :json
+
+      true ->
+        raise "No JSON library configured. Please add :jason as a dependency or configure :postgrex, :json_library."
+    end
+  end
+
   defp json_decode(x) when is_binary(x) do
-    {:ok, Ecto.Adapter.json_library().decode!(x)}
+    library = json_library()
+    {:ok, json_decode!(library, x)}
   end
 
   defp json_decode(x), do: {:ok, x}
 
   @doc false
   def dumpers(:map, type), do: [type, &json_encode/1]
-  def dumpers({:map, _}, type), do: [type, &json_encode/1]
+
+  def dumpers({:map, _} = type, _) do
+    [&Ecto.Type.embedded_dump(type, &1, :json), &json_encode/1]
+  end
 
   def dumpers({:embed, _} = type, _) do
-    [&Ecto.Adapters.SQL.dump_embed(type, &1), &json_encode/1]
+    [&Ecto.Type.embedded_dump(type, &1, :json), &json_encode/1]
   end
 
   def dumpers(:binary_id, _type), do: [&Ecto.UUID.cast/1]
@@ -143,14 +192,60 @@ defmodule RedshiftEcto do
   def dumpers(_, type), do: [type]
 
   defp json_encode(%{} = x) do
-    {:ok, Ecto.Adapter.json_library().encode!(x)}
+    library = json_library()
+    {:ok, json_encode!(library, x)}
   end
 
   defp json_encode(x), do: {:ok, x}
 
+  defp json_decode!(library, value) do
+    cond do
+      function_exported?(library, :decode!, 1) ->
+        library.decode!(value)
+
+      function_exported?(library, :decode, 1) ->
+        decode_result(library.decode(value))
+
+      function_exported?(library, :decode, 2) ->
+        decode_result(library.decode(value, []))
+
+      true ->
+        raise ArgumentError,
+              "The configured JSON library #{inspect(library)} does not export decode/1 or decode!/1"
+    end
+  end
+
+  defp decode_result({:ok, decoded}), do: decoded
+  defp decode_result({:ok, decoded, _}), do: decoded
+  defp decode_result(decoded) when is_list(decoded), do: IO.iodata_to_binary(decoded)
+  defp decode_result(decoded), do: decoded
+
+  defp json_encode!(library, value) do
+    cond do
+      function_exported?(library, :encode!, 1) ->
+        library.encode!(value)
+
+      function_exported?(library, :encode, 1) ->
+        encode_result(library.encode(value))
+
+      function_exported?(library, :encode, 2) ->
+        encode_result(library.encode(value, []))
+
+      true ->
+        raise ArgumentError,
+              "The configured JSON library #{inspect(library)} does not export encode/1 or encode!/1"
+    end
+  end
+
+  defp encode_result({:ok, encoded}), do: encode_result(encoded)
+  defp encode_result(encoded) when is_list(encoded), do: IO.iodata_to_binary(encoded)
+  defp encode_result(encoded) when is_binary(encoded), do: encoded
+  defp encode_result(encoded), do: encoded
+
   ## Storage API
 
   @doc false
+  @impl true
   def storage_up(opts) do
     database =
       Keyword.fetch!(opts, :database) || raise ":database is nil in repository configuration"
@@ -173,6 +268,7 @@ defmodule RedshiftEcto do
   end
 
   @doc false
+  @impl true
   def storage_down(opts) do
     database =
       Keyword.fetch!(opts, :database) || raise ":database is nil in repository configuration"
@@ -193,11 +289,36 @@ defmodule RedshiftEcto do
   end
 
   @doc false
+  @impl true
+  def storage_status(opts) do
+    database =
+      Keyword.fetch!(opts, :database) || raise ":database is nil in repository configuration"
+
+    opts = Keyword.put(opts, :database, "template1")
+
+    query =
+      "SELECT datname FROM pg_catalog.pg_database WHERE datname = '#{database}'"
+
+    case run_query(query, opts) do
+      {:ok, %{num_rows: 0}} -> :down
+      {:ok, %{num_rows: _}} -> :up
+      {:error, %{postgres: %{code: :invalid_catalog_name}}} -> :down
+      {:error, error} -> {:error, Exception.message(error)}
+    end
+  end
+
+  @impl true
   def supports_ddl_transaction? do
     true
   end
 
+  @impl true
+  defdelegate dump_cmd(args, opts, config), to: Postgres
+
+  @impl true
   defdelegate structure_dump(default, config), to: Postgres
+
+  @impl true
   defdelegate structure_load(default, config), to: Postgres
 
   ## Helpers

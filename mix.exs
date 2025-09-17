@@ -7,7 +7,7 @@ defmodule RedshiftEcto.MixProject do
     [
       app: :redshift_ecto,
       version: @version,
-      elixir: "~> 1.6",
+      elixir: "~> 1.11",
       deps: deps(),
       build_per_environment: false,
       build_embedded: Mix.env() == :prod,
@@ -34,11 +34,9 @@ defmodule RedshiftEcto.MixProject do
 
   defp deps do
     [
-      {:ecto, "~> 2.2"},
-      {:postgrex, "~> 0.13"},
-      {:ecto_replay_sandbox, "~> 1.0.0"},
-      {:ex_doc, "~> 0.18", only: :dev, runtime: false},
-      {:poison, "~> 2.2 or ~> 3.0", optional: true}
+      {:ecto, "~> 3.13", override: true},
+      {:ecto_sql, "~> 3.13"},
+      {:postgrex, "~> 0.21"}
     ]
   end
 
