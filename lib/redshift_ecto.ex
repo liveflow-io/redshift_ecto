@@ -126,13 +126,11 @@ defmodule RedshiftEcto do
   end
 
   def loaders(:binary_id, _type), do: [&{:ok, &1}]
-  def loaders(:uuid, Ecto.UUID), do: [&{:ok, &1}]
+  def loaders(:uuid, _type), do: [&{:ok, &1}]
   def loaders(_, type), do: [type]
 
   def json_library do
-    configured = Application.get_env(:postgrex, :json_library)
-
-    case configured do
+    case Application.get_env(:postgrex, :json_library) do
       nil ->
         default_json_library()
 
@@ -158,14 +156,17 @@ defmodule RedshiftEcto do
 
   defp default_json_library do
     cond do
+      Code.ensure_loaded?(JSON) ->
+        JSON
+
       Code.ensure_loaded?(Jason) ->
         Jason
 
-      Code.ensure_loaded?(:json) ->
-        :json
+      Code.ensure_loaded?(Poison) ->
+        Poison
 
       true ->
-        raise "No JSON library configured. Please add :jason as a dependency or configure :postgrex, :json_library."
+        raise "No JSON library configured. Please configure :postgrex, :json_library."
     end
   end
 
