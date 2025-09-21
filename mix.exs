@@ -7,7 +7,7 @@ defmodule RedshiftEcto.MixProject do
     [
       app: :redshift_ecto,
       version: @version,
-      elixir: "~> 1.11",
+      elixir: "~> 1.18",
       deps: deps(),
       build_per_environment: false,
       build_embedded: Mix.env() == :prod,
