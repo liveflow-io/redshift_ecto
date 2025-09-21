@@ -9,27 +9,36 @@ if Code.ensure_loaded?(Postgrex) do
 
     ## Module and Options
 
+    @impl true
     def child_spec(opts) do
       opts
       |> Keyword.put_new(:port, @default_port)
-      |> Keyword.put_new(:types, Ecto.Adapters.Postgres.TypeModule)
       |> Postgrex.child_spec()
     end
 
     # constraints may be defined but are not enforced by Amazon Redshift
-    def to_constraints(%Postgrex.Error{}), do: []
+    @impl true
+    def to_constraints(%Postgrex.Error{}, _opts), do: []
 
     ## Query
 
+    @impl true
     defdelegate prepare_execute(conn, name, sql, params, opts), to: Postgres
+    @impl true
     defdelegate execute(conn, sql_or_query, params, opts), to: Postgres
+    @impl true
     defdelegate stream(conn, sql, params, opts), to: Postgres
+    @impl true
+    defdelegate query(conn, sql, params, opts), to: Postgres
+    @impl true
+    defdelegate query_many(conn, sql, params, opts), to: Postgres
 
     alias Ecto.Query
-    alias Ecto.Query.{BooleanExpr, JoinExpr, QueryExpr}
+    alias Ecto.Query.{BooleanExpr, ByExpr, JoinExpr, QueryExpr}
 
-    def all(query) do
-      sources = create_names(query)
+    @impl true
+    def all(query, as_prefix \\ []) do
+      sources = create_names(query, as_prefix)
       {select_distinct, order_by_distinct} = distinct(query.distinct, sources, query)
 
       from = from(query, sources)
@@ -46,6 +55,7 @@ if Code.ensure_loaded?(Postgrex) do
       [select, from, join, where, group_by, having, order_by, limit, offset | lock]
     end
 
+    @impl true
     def update_all(%{from: from, select: nil} = query) do
       sources = sources_unaliased(query)
       {from, _} = get_source(query, sources, 0, from)
@@ -61,6 +71,7 @@ if Code.ensure_loaded?(Postgrex) do
       error!(nil, "RETURNING is not supported by Redshift")
     end
 
+    @impl true
     def update(prefix, table, fields, filters, []) do
       {fields, count} =
         intersperse_reduce(fields, ", ", 1, fn field, acc ->
@@ -79,6 +90,7 @@ if Code.ensure_loaded?(Postgrex) do
       error!(nil, "RETURNING is not supported by Redshift")
     end
 
+    @impl true
     def delete_all(%{from: from, select: nil} = query) do
       sources = sources_unaliased(query)
       {from, _} = get_source(query, sources, 0, from)
@@ -93,6 +105,7 @@ if Code.ensure_loaded?(Postgrex) do
       error!(nil, "RETURNING is not supported by Redshift")
     end
 
+    @impl true
     def delete(prefix, table, filters, []) do
       {filters, _} =
         intersperse_reduce(filters, " AND ", 1, fn field, acc ->
@@ -106,22 +119,35 @@ if Code.ensure_loaded?(Postgrex) do
       error!(nil, "RETURNING is not supported by Redshift")
     end
 
-    def insert(prefix, table, header, rows, {:raise, _, []}, []) do
+    @impl true
+    def explain_query(_conn, _query, _params, _opts) do
+      error!(nil, "EXPLAIN is not supported by Redshift")
+    end
+
+    @impl true
+    def insert(prefix, table, header, rows, {:raise, _, []}, [], placeholders) do
+      counter_offset = length(placeholders) + 1
+
       values =
         if header == [] do
           [" VALUES " | intersperse_map(rows, ?,, fn _ -> "(DEFAULT)" end)]
         else
-          [?\s, ?(, intersperse_map(header, ?,, &quote_name/1), ") VALUES " | insert_all(rows, 1)]
+          [
+            ?\s,
+            ?(,
+            intersperse_map(header, ?,, &quote_name/1),
+            ") VALUES " | insert_all(rows, counter_offset)
+          ]
         end
 
       ["INSERT INTO ", quote_table(prefix, table) | values]
     end
 
-    def insert(_prefix, _table, _header, _rows, _on_conflict, []) do
+    def insert(_prefix, _table, _header, _rows, _on_conflict, [], _placeholders) do
       error!(nil, "ON CONFLICT is not supported by Redshift")
     end
 
-    def insert(_prefix, _table, _header, _rows, _on_conflict, _returning) do
+    def insert(_prefix, _table, _header, _rows, _on_conflict, _returning, _placeholders) do
       error!(nil, "RETURNING is not supported by Redshift")
     end
 
@@ -137,6 +163,9 @@ if Code.ensure_loaded?(Postgrex) do
       intersperse_reduce(values, ?,, counter, fn
         nil, counter ->
           {"DEFAULT", counter}
+
+        {:placeholder, placeholder_index}, counter ->
+          {[?$ | placeholder_index], counter}
 
         _, counter ->
           {[?$ | Integer.to_string(counter)], counter + 1}
@@ -183,11 +212,11 @@ if Code.ensure_loaded?(Postgrex) do
     end
 
     defp distinct(nil, _, _), do: {[], []}
-    defp distinct(%QueryExpr{expr: []}, _, _), do: {[], []}
-    defp distinct(%QueryExpr{expr: true}, _, _), do: {" DISTINCT", []}
-    defp distinct(%QueryExpr{expr: false}, _, _), do: {[], []}
+    defp distinct(%ByExpr{expr: []}, _, _), do: {[], []}
+    defp distinct(%ByExpr{expr: true}, _, _), do: {" DISTINCT", []}
+    defp distinct(%ByExpr{expr: false}, _, _), do: {[], []}
 
-    defp distinct(%QueryExpr{expr: exprs}, sources, query) do
+    defp distinct(%ByExpr{expr: exprs}, sources, query) do
       {[
          " DISTINCT ON (",
          intersperse_map(exprs, ", ", fn {_, expr} -> expr(expr, sources, query) end),
@@ -195,9 +224,9 @@ if Code.ensure_loaded?(Postgrex) do
        ], exprs}
     end
 
-    defp from(%{from: from} = query, sources) do
-      {from, name} = get_source(query, sources, 0, from)
-      [" FROM ", from, " AS " | name]
+    defp from(%{from: %{source: source, hints: hints}} = query, sources) do
+      {from, name} = get_source(query, sources, 0, source)
+      [" FROM ", from, " AS ", name | Enum.map(hints, &[?\s | &1])]
     end
 
     defp update_fields(%Query{updates: updates} = query, sources) do
@@ -287,7 +316,7 @@ if Code.ensure_loaded?(Postgrex) do
     defp group_by(%Query{group_bys: group_bys} = query, sources) do
       [
         " GROUP BY "
-        | intersperse_map(group_bys, ", ", fn %QueryExpr{expr: expr} ->
+        | intersperse_map(group_bys, ", ", fn %ByExpr{expr: expr} ->
             intersperse_map(expr, ", ", &expr(&1, sources, query))
           end)
       ]
@@ -315,7 +344,11 @@ if Code.ensure_loaded?(Postgrex) do
 
     defp limit(%Query{limit: nil}, _sources), do: []
 
-    defp limit(%Query{limit: %QueryExpr{expr: expr}} = query, sources) do
+    defp limit(%Query{limit: %{with_ties: true}} = query, _sources) do
+      error!(query, ":with_ties option is not supported by Redshift")
+    end
+
+    defp limit(%Query{limit: %{expr: expr}} = query, sources) do
       [" LIMIT " | expr(expr, sources, query)]
     end
 
@@ -401,6 +434,10 @@ if Code.ensure_loaded?(Postgrex) do
 
     defp expr(%Ecto.SubQuery{query: query}, _sources, _query) do
       all(query)
+    end
+
+    defp expr(%Ecto.Query.FromExpr{source: source}, sources, query) do
+      expr(source, sources, query)
     end
 
     defp expr({:fragment, _, [kw]}, _sources, query) when is_list(kw) or tuple_size(kw) == 3 do
@@ -515,6 +552,10 @@ if Code.ensure_loaded?(Postgrex) do
     defp sources_unaliased(prefix, sources, pos, limit) when pos < limit do
       current =
         case elem(sources, pos) do
+          {table, schema, source_prefix} when table not in [:fragment, :values] ->
+            quoted = quote_table(source_prefix || prefix, table)
+            {quoted, quoted, schema}
+
           {table, schema} ->
             quoted = quote_table(prefix, table)
             {quoted, quoted, schema}
@@ -539,34 +580,51 @@ if Code.ensure_loaded?(Postgrex) do
       []
     end
 
-    defp create_names(%{prefix: prefix, sources: sources}) do
-      create_names(prefix, sources, 0, tuple_size(sources)) |> List.to_tuple()
+    defp create_names(%{prefix: prefix, sources: sources}, as_prefix) do
+      create_names(prefix, sources, 0, tuple_size(sources), as_prefix) |> List.to_tuple()
     end
 
-    defp create_names(prefix, sources, pos, limit) when pos < limit do
-      current =
-        case elem(sources, pos) do
-          {table, schema} ->
-            name = [create_alias(table) | Integer.to_string(pos)]
-            {quote_table(prefix, table), name, schema}
-
-          {:fragment, _, _} ->
-            {nil, [?f | Integer.to_string(pos)], nil}
-
-          %Ecto.SubQuery{} ->
-            {nil, [?s | Integer.to_string(pos)], nil}
-        end
-
-      [current | create_names(prefix, sources, pos + 1, limit)]
+    defp create_names(prefix, sources, pos, limit, as_prefix) when pos < limit do
+      [
+        create_name(prefix, sources, pos, as_prefix)
+        | create_names(prefix, sources, pos + 1, limit, as_prefix)
+      ]
     end
 
-    defp create_names(_prefix, _sources, pos, pos), do: []
+    defp create_names(_prefix, _sources, pos, pos, as_prefix), do: [as_prefix]
+
+    defp create_name(prefix, sources, pos, as_prefix) do
+      case elem(sources, pos) do
+        {:values, _, _} ->
+          {nil, as_prefix ++ [?v | Integer.to_string(pos)], nil}
+
+        {:fragment, _, _} ->
+          {nil, as_prefix ++ [?f | Integer.to_string(pos)], nil}
+
+        {table, schema, source_prefix} ->
+          name = as_prefix ++ [create_alias(table) | Integer.to_string(pos)]
+          {quote_table(source_prefix || prefix, table), name, schema}
+
+        {table, schema} ->
+          name = as_prefix ++ [create_alias(table) | Integer.to_string(pos)]
+          {quote_table(prefix, table), name, schema}
+
+        %Ecto.SubQuery{} ->
+          {nil, as_prefix ++ [?s | Integer.to_string(pos)], nil}
+      end
+    end
 
     defp create_alias(<<first, _rest::binary>>) when first in ?a..?z when first in ?A..?Z do
-      <<first>>
+      first
     end
 
-    defp create_alias(_), do: "t"
+    defp create_alias(atom) when is_atom(atom) do
+      atom
+      |> Atom.to_string()
+      |> create_alias()
+    end
+
+    defp create_alias(_), do: ?t
 
     ## DDL
 
@@ -574,6 +632,7 @@ if Code.ensure_loaded?(Postgrex) do
 
     @drops [:drop, :drop_if_exists]
 
+    @impl true
     def execute_ddl({command, %Table{} = table, columns})
         when command in [:create, :create_if_not_exists] do
       table_name = quote_table(table.prefix, table.name)
@@ -670,6 +729,15 @@ if Code.ensure_loaded?(Postgrex) do
 
     def execute_ddl(keyword) when is_list(keyword),
       do: error!(nil, "PostgreSQL adapter does not support keyword lists in execute")
+
+    @impl true
+    def ddl_logs(_result), do: []
+
+    @impl true
+    def table_exists_query(table) do
+      {"SELECT true FROM information_schema.tables WHERE table_name = $1 AND table_schema = current_schema() LIMIT 1",
+       [table]}
+    end
 
     defp pk_definition(columns, prefix) do
       pks = for {_, name, _, opts} <- columns, opts[:primary_key], do: name
@@ -795,7 +863,7 @@ if Code.ensure_loaded?(Postgrex) do
       do: [" DEFAULT ", to_string(literal)]
 
     defp default_expr({:ok, %{} = map}, :map) do
-      default = Ecto.Adapter.json_library().encode!(map)
+      default = RedshiftEcto.encode_json!(map)
       [" DEFAULT ", single_quote(default)]
     end
 
